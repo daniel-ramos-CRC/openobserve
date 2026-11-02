@@ -844,14 +844,17 @@ pub async fn native_session_activity(headers: HeaderMap) -> Response {
     let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+    // Compare against the configured public origin, not Host, which reverse proxies
+    // (including Cloudflare Tunnel) may rewrite to an internal upstream address.
+    let configured_url = get_config().common.web_url.trim_end_matches('/');
+    let expected_origin = if let Some(scheme_end) = configured_url.find("://") {
+        let authority = &configured_url[scheme_end + 3..];
+        let end = authority.find('/').unwrap_or(authority.len());
+        &configured_url[..scheme_end + 3 + end]
+    } else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    let origin_host = origin
-        .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"))
-        .and_then(|authority| authority.split('/').next());
-    if origin_host != Some(host) {
+    if origin != expected_origin {
         return StatusCode::FORBIDDEN.into_response();
     }
     let jar = CookieJar::from_headers(&headers);
