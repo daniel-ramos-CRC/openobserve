@@ -147,7 +147,7 @@ pub async fn delete_expired() -> Result<u64, errors::Error> {
                 .add(Column::ExpiresAt.lt(chrono::Utc::now().timestamp()))
                 .add(
                     sea_orm::Condition::all()
-                        .add(Column::ExpiresAt.ge(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.gte(100_000_000_000_i64))
                         .add(Column::ExpiresAt.lt(now)),
                 ),
         )
