@@ -24,6 +24,10 @@ use o2_enterprise::enterprise::common::config::get_config as get_o2_config;
 /// Returns whether a session has exceeded the configured idle period.
 /// Timestamps are Unix epoch microseconds; a zero timeout disables idle expiration.
 /// A session exactly at the timeout boundary is considered expired.
+fn expiry_in_micros(value: i64) -> i64 {
+    infra::table::sessions::expiry_in_micros(value)
+}
+
 fn is_idle_expired(last_activity_micros: i64, now_micros: i64, timeout_seconds: i64) -> bool {
     if timeout_seconds <= 0 {
         return false;
@@ -56,9 +60,9 @@ pub async fn get(session_id: &str) -> Result<String, anyhow::Error> {
                 session_id,
                 now,
                 expires_at,
-                now > expires_at
+                now >= expiry_in_micros(expires_at)
             );
-            if now > expires_at {
+            if now >= expiry_in_micros(expires_at) {
                 // Session expired - remove from cache and DB
                 log::warn!(
                     "Session expired (cached): {} (expired at {})",
@@ -102,7 +106,7 @@ pub async fn get(session_id: &str) -> Result<String, anyhow::Error> {
                 delete(session_id).await?;
                 return Err(anyhow::anyhow!("Session idle timeout exceeded"));
             }
-            if now >= expires_at {
+            if now >= expiry_in_micros(expires_at) {
                 log::warn!(
                     "Session expired (db): {} (expired at {})",
                     session_id,
@@ -117,7 +121,7 @@ pub async fn get(session_id: &str) -> Result<String, anyhow::Error> {
                 return Err(anyhow::anyhow!("Session expired"));
             }
             // Cache the expiry time
-            USER_SESSIONS_EXPIRY.insert(session_id.to_string(), expires_at);
+            USER_SESSIONS_EXPIRY.insert(session_id.to_string(), expiry_in_micros(expires_at));
 
             let access_token = session.access_token.clone();
             // Cache the token
@@ -165,7 +169,7 @@ pub async fn set_with_expiry(
 
     USER_SESSIONS.insert(session_id.to_string(), val.to_string());
     // Cache the expiry time
-    USER_SESSIONS_EXPIRY.insert(session_id.to_string(), expires_at);
+    USER_SESSIONS_EXPIRY.insert(session_id.to_string(), expiry_in_micros(expires_at));
 
     Ok(())
 }
@@ -231,7 +235,7 @@ pub async fn watch() -> Result<(), anyhow::Error> {
                         if !session.access_token.is_empty() {
                             USER_SESSIONS.insert(session_id.to_string(), session.access_token);
                             // Cache expiry time
-                            USER_SESSIONS_EXPIRY.insert(session_id.to_string(), session.expires_at);
+                            USER_SESSIONS_EXPIRY.insert(session_id.to_string(), expiry_in_micros(session.expires_at));
                             log::debug!("Session added to cache: {}", session_id);
                         }
                     }
@@ -285,7 +289,7 @@ pub async fn cache() -> Result<(), anyhow::Error> {
         if !session.access_token.is_empty() {
             USER_SESSIONS.insert(session.session_id.clone(), session.access_token);
             // Cache expiry time
-            USER_SESSIONS_EXPIRY.insert(session.session_id, session.expires_at);
+            USER_SESSIONS_EXPIRY.insert(session.session_id, expiry_in_micros(session.expires_at));
         }
     }
 
@@ -316,7 +320,7 @@ pub async fn cleanup_expired() -> Result<u64, anyhow::Error> {
         for entry in USER_SESSIONS_EXPIRY.iter() {
             let session_id = entry.key();
             let expires_at = *entry.value();
-            if now > expires_at {
+            if now >= expiry_in_micros(expires_at) {
                 expired_sessions.push(session_id.clone());
             }
         }
@@ -341,6 +345,12 @@ pub async fn cleanup_expired() -> Result<u64, anyhow::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_expiry_unit_compatibility() {
+        assert_eq!(expiry_in_micros(1_800_000_000), 1_800_000_000_000_000);
+        assert_eq!(expiry_in_micros(1_800_000_000_000_000), 1_800_000_000_000_000);
+    }
 
     #[test]
     fn test_idle_expiration_boundary() {
