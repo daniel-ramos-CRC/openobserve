@@ -846,7 +846,8 @@ pub async fn native_session_activity(headers: HeaderMap) -> Response {
     };
     // Compare against the configured public origin, not Host, which reverse proxies
     // (including Cloudflare Tunnel) may rewrite to an internal upstream address.
-    let configured_url = get_config().common.web_url.trim_end_matches('/');
+    let cfg = get_config();
+    let configured_url = cfg.common.web_url.trim_end_matches('/');
     let expected_origin = if let Some(scheme_end) = configured_url.find("://") {
         let authority = &configured_url[scheme_end + 3..];
         let end = authority.find('/').unwrap_or(authority.len());
