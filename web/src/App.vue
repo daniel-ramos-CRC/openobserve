@@ -80,7 +80,14 @@ export default {
       heartbeatPending = true;
       void auth.session_activity()
         .catch((error: any) => {
-          if (error?.response?.status === 401) expireSession(store);
+          if (error?.response?.status === 401) {
+            expireSession(store);
+          } else if (error?.response?.status === 403) {
+            // A rejected heartbeat must not silently leave an apparently active session.
+            // Do not repeatedly retry until the origin configuration is corrected.
+            console.error("Session activity rejected (403). Verify ZO_WEB_URL matches the browser origin.");
+            expireSession(store);
+          }
         })
         .finally(() => { heartbeatPending = false; });
     };
