@@ -21,13 +21,29 @@ use crate::{
     errors,
 };
 
+/// Session expiry values may be stored as epoch seconds (legacy) or microseconds.
+pub fn expiry_in_micros(value: i64) -> i64 {
+    // Unix seconds are currently 10 digits; microseconds are 16 digits.
+    // Reject non-positive values as already expired.
+    if value <= 0 { return 0; }
+    if value < 100_000_000_000 { value.saturating_mul(1_000_000) } else { value }
+}
+
 /// Gets a session by session_id
 pub async fn get(session_id: &str) -> Result<Option<Model>, errors::Error> {
     let client = get_orm_client_ro().await;
     let session = Entity::find()
         .filter(Column::SessionId.eq(session_id))
-        // Session expiration timestamps are stored as epoch microseconds.
-        .filter(Column::ExpiresAt.gt(chrono::Utc::now().timestamp_micros()))
+        // Support legacy epoch-seconds values as well as newer microseconds.
+        .filter(
+            sea_orm::Condition::any()
+                .add(Column::ExpiresAt.gt(chrono::Utc::now().timestamp_micros()))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(Column::ExpiresAt.lt(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.gt(chrono::Utc::now().timestamp())),
+                ),
+        )
         .one(client)
         .await?;
     Ok(session)
@@ -87,7 +103,15 @@ pub async fn touch_if_active(
     let result = Entity::update_many()
         .col_expr(Column::UpdatedAt, sea_orm::sea_query::Expr::value(now))
         .filter(Column::SessionId.eq(session_id))
-        .filter(Column::ExpiresAt.gt(now))
+        .filter(
+            sea_orm::Condition::any()
+                .add(Column::ExpiresAt.gt(now))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(Column::ExpiresAt.lt(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.gt(chrono::Utc::now().timestamp())),
+                ),
+        )
         .filter(Column::UpdatedAt.gt(cutoff))
         .exec(client)
         .await?;
@@ -118,7 +142,15 @@ pub async fn delete_expired() -> Result<u64, errors::Error> {
     let now = chrono::Utc::now().timestamp_micros();
 
     let result = Entity::delete_many()
-        .filter(Column::ExpiresAt.lt(now))
+        .filter(
+            sea_orm::Condition::any()
+                .add(Column::ExpiresAt.lt(chrono::Utc::now().timestamp()))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(Column::ExpiresAt.ge(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.lt(now)),
+                ),
+        )
         .exec(client)
         .await?;
 
