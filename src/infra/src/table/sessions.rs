@@ -21,11 +21,29 @@ use crate::{
     errors,
 };
 
+/// Session expiry values may be stored as epoch seconds (legacy) or microseconds.
+pub fn expiry_in_micros(value: i64) -> i64 {
+    // Unix seconds are currently 10 digits; microseconds are 16 digits.
+    // Reject non-positive values as already expired.
+    if value <= 0 { return 0; }
+    if value < 100_000_000_000 { value.saturating_mul(1_000_000) } else { value }
+}
+
 /// Gets a session by session_id
 pub async fn get(session_id: &str) -> Result<Option<Model>, errors::Error> {
     let client = get_orm_client_ro().await;
     let session = Entity::find()
         .filter(Column::SessionId.eq(session_id))
+        // Support legacy epoch-seconds values as well as newer microseconds.
+        .filter(
+            sea_orm::Condition::any()
+                .add(Column::ExpiresAt.gt(chrono::Utc::now().timestamp_micros()))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(Column::ExpiresAt.lt(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.gt(chrono::Utc::now().timestamp())),
+                ),
+        )
         .one(client)
         .await?;
     Ok(session)
@@ -36,7 +54,7 @@ pub async fn get(session_id: &str) -> Result<Option<Model>, errors::Error> {
 /// # Arguments
 /// * `session_id` - Unique session identifier
 /// * `access_token` - Access token to store
-/// * `expires_at` - Expiration timestamp (seconds since epoch) All sessions must have an expiry -
+/// * `expires_at` - Expiration timestamp (microseconds since epoch) All sessions must have an expiry -
 ///   either from JWT or default 24 hours
 pub async fn set_with_expiry(
     session_id: &str,
@@ -73,6 +91,33 @@ pub async fn set_with_expiry(
     }
 }
 
+/// Records explicit user activity only while the session is still valid.
+/// The conditional update prevents a stale heartbeat from reviving an expired session.
+pub async fn touch_if_active(
+    session_id: &str,
+    idle_timeout_seconds: i64,
+) -> Result<bool, errors::Error> {
+    let now = chrono::Utc::now().timestamp_micros();
+    let cutoff = now.saturating_sub(idle_timeout_seconds.saturating_mul(1_000_000));
+    let client = get_orm_client_rw().await;
+    let result = Entity::update_many()
+        .col_expr(Column::UpdatedAt, sea_orm::sea_query::Expr::value(now))
+        .filter(Column::SessionId.eq(session_id))
+        .filter(
+            sea_orm::Condition::any()
+                .add(Column::ExpiresAt.gt(now))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(Column::ExpiresAt.lt(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.gt(chrono::Utc::now().timestamp())),
+                ),
+        )
+        .filter(Column::UpdatedAt.gt(cutoff))
+        .exec(client)
+        .await?;
+    Ok(result.rows_affected > 0)
+}
+
 /// Deletes a session by session_id
 pub async fn delete(session_id: &str) -> Result<(), errors::Error> {
     let client = get_orm_client_rw().await;
@@ -94,12 +139,41 @@ pub async fn list() -> Result<Vec<Model>, errors::Error> {
 /// This is more efficient than deleting one at a time
 pub async fn delete_expired() -> Result<u64, errors::Error> {
     let client = get_orm_client_rw().await;
-    let now = chrono::Utc::now().timestamp();
+    let now = chrono::Utc::now().timestamp_micros();
 
     let result = Entity::delete_many()
-        .filter(Column::ExpiresAt.lt(now))
+        .filter(
+            sea_orm::Condition::any()
+                .add(Column::ExpiresAt.lt(chrono::Utc::now().timestamp()))
+                .add(
+                    sea_orm::Condition::all()
+                        .add(Column::ExpiresAt.gte(100_000_000_000_i64))
+                        .add(Column::ExpiresAt.lt(now)),
+                ),
+        )
         .exec(client)
         .await?;
 
     Ok(result.rows_affected)
+}
+
+#[cfg(test)]
+mod expiry_unit_tests {
+    use super::expiry_in_micros;
+
+    #[test]
+    fn legacy_seconds_are_converted_to_microseconds() {
+        assert_eq!(expiry_in_micros(1_800_000_000), 1_800_000_000_000_000);
+    }
+
+    #[test]
+    fn microseconds_are_preserved() {
+        assert_eq!(expiry_in_micros(1_800_000_000_000_000), 1_800_000_000_000_000);
+    }
+
+    #[test]
+    fn invalid_or_overflowing_expiry_is_not_extended() {
+        assert_eq!(expiry_in_micros(0), 0);
+        assert_eq!(expiry_in_micros(-1), 0);
+    }
 }
