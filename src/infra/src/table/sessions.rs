@@ -156,3 +156,24 @@ pub async fn delete_expired() -> Result<u64, errors::Error> {
 
     Ok(result.rows_affected)
 }
+
+#[cfg(test)]
+mod expiry_unit_tests {
+    use super::expiry_in_micros;
+
+    #[test]
+    fn legacy_seconds_are_converted_to_microseconds() {
+        assert_eq!(expiry_in_micros(1_800_000_000), 1_800_000_000_000_000);
+    }
+
+    #[test]
+    fn microseconds_are_preserved() {
+        assert_eq!(expiry_in_micros(1_800_000_000_000_000), 1_800_000_000_000_000);
+    }
+
+    #[test]
+    fn invalid_or_overflowing_expiry_is_not_extended() {
+        assert_eq!(expiry_in_micros(0), 0);
+        assert_eq!(expiry_in_micros(-1), 0);
+    }
+}
