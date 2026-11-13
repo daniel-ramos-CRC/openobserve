@@ -94,8 +94,8 @@ export const makePrebuiltDestinationSchema = (
       const oauth = values.authMethod === "oauth2";
       const required = oauth
         ? [
-            "oauthTokenUrl", "oauthClientId", "oauthClientSecretEnv", "oauthGrantType",
-            ...(values.oauthGrantType === "password" ? ["oauthUsernameEnv", "oauthPasswordEnv"] : []),
+            "oauthClientId", "oauthGrantType",
+            ...(values.oauthGrantType === "password" ? ["oauthUsername"] : []),
           ]
         : ["username", "password"];
       for (const key of required) {
@@ -112,19 +112,6 @@ export const makePrebuiltDestinationSchema = (
         if (grant && !["client_credentials", "password"].includes(grant)) {
           ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["oauthGrantType"],
             message: "Unsupported OAuth grant type" });
-        }
-        const tokenUrl = String(values.oauthTokenUrl ?? "");
-        if (tokenUrl && !/^https:\/\//i.test(tokenUrl)) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["oauthTokenUrl"],
-            message: "OAuth token endpoint must use HTTPS" });
-        }
-        for (const key of ["oauthClientSecretEnv",
-          ...(grant === "password" ? ["oauthUsernameEnv", "oauthPasswordEnv"] : [])]) {
-          const name = String(values[key] ?? "");
-          if (name && !/^ZO_OAUTH_[A-Za-z0-9_]+$/.test(name)) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key],
-              message: "Use an environment variable named ZO_OAUTH_*" });
-          }
         }
       }
     }
