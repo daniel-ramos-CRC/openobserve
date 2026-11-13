@@ -3743,6 +3743,7 @@ pub(crate) async fn send_http_notification(
     let builder = send::destination_client_builder(endpoint.skip_tls_verify);
     let client = common::utils::ssrf_guard::build_safe_destination_client(builder)?;
     let url = url::Url::parse(&endpoint.url)?;
+    let oauth_token = crate::alerts::notifications::servicenow_oauth::bearer(endpoint).await?;
     let build_req = |body: String| {
         let mut req = match endpoint.method {
             HTTPType::POST => client.post(url.clone()),
