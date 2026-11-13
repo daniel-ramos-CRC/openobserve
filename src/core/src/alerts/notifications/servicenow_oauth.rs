@@ -5,8 +5,8 @@
 //! Opt-in OAuth authentication for ServiceNow alert destinations.
 //!
 //! The existing Basic authentication path is deliberately unchanged.
-//! Credentials are referenced by environment-variable name, never stored in
-//! destination metadata or emitted in errors/logs.
+//! Secrets are encrypted in persisted destination metadata and are never
+//! returned to the UI or emitted in errors/logs.
 
 use std::{collections::HashMap, sync::LazyLock, time::{Duration, Instant}};
 use tokio::sync::Mutex;
@@ -41,29 +41,52 @@ pub async fn bearer(endpoint: &Endpoint) -> anyhow::Result<Option<String>> {
     if grant != "client_credentials" && grant != "password" {
         anyhow::bail!("Unsupported ServiceNow OAuth grant type");
     }
-    let token_url = field(endpoint, "credential_oauthTokenUrl");
+    // Derive the token endpoint from the configured ServiceNow instance URL.
+    // The UI never asks the user to type a separate token URL.
+    let mut parsed_url = url::Url::parse(&endpoint.url)
+        .map_err(|_| anyhow::anyhow!("Invalid ServiceNow instance URL"))?;
+    if parsed_url.scheme() != "https" || parsed_url.host_str().is_none() {
+        anyhow::bail!("ServiceNow OAuth requires an HTTPS instance URL");
+    }
+    parsed_url.set_path("/oauth_token.do");
+    parsed_url.set_query(None);
+    parsed_url.set_fragment(None);
+    let token_url = parsed_url.as_str();
+
     let client_id = field(endpoint, "credential_oauthClientId");
-    let secret_env = field(endpoint, "credential_oauthClientSecretEnv");
     let scope = field(endpoint, "credential_oauthScope");
-    if token_url.is_empty() || client_id.is_empty() {
+    if client_id.trim().is_empty() {
         anyhow::bail!("Incomplete ServiceNow OAuth configuration");
     }
-    let read_secret = |name: &str| -> anyhow::Result<String> {
-        if !name.starts_with("ZO_OAUTH_")
-            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            anyhow::bail!("OAuth secret must reference a ZO_OAUTH_* environment variable");
+    let key = std::env::var("ZO_OAUTH_ENCRYPTION_KEY")
+        .map_err(|_| anyhow::anyhow!("OAuth encryption key is not configured"))?;
+    let dek = config::utils::encryption::decode_encryption_key(&key)
+        .map_err(|_| anyhow::anyhow!("Invalid OAuth encryption key"))?;
+    let decrypt = |name: &str| -> anyhow::Result<String> {
+        let encrypted = field(endpoint, name);
+        if encrypted.is_empty() {
+            anyhow::bail!("Required OAuth secret is missing");
         }
-        std::env::var(name).map_err(|_| anyhow::anyhow!("Required OAuth environment variable is not configured"))
+        config::utils::encryption::decrypt_secret_value(&dek, encrypted)
+            .map_err(|_| anyhow::anyhow!("Unable to decrypt stored OAuth secret"))
     };
-
-    let secret = read_secret(secret_env)?;
-    let username_env = field(endpoint, "credential_oauthUsernameEnv");
-    let password_env = field(endpoint, "credential_oauthPasswordEnv");
-    let username = if grant == "password" { Some(read_secret(username_env)?) } else { None };
-    let password = if grant == "password" { Some(read_secret(password_env)?) } else { None };
-
-    let cache_key = format!("{token_url}|{client_id}|{secret_env}|{scope}|{grant}|{username_env}|{password_env}");
+    let secret = decrypt("oauth_client_secret_enc")?;
+    let username = if grant == "password" {
+        let value = field(endpoint, "credential_oauthUsername");
+        if value.is_empty() {
+            anyhow::bail!("Password grant username is missing");
+        }
+        Some(value.to_string())
+    } else {
+        None
+    };
+    let password = if grant == "password" {
+        Some(decrypt("oauth_password_enc")?)
+    } else {
+        None
+    };
+    // Cache by destination identity/configuration; tokens stay in process memory.
+    let cache_key = format!("{token_url}|{client_id}|{scope}|{grant}|{username:?}|{secret}");
     let mut cache = TOKENS.lock().await;
     if let Some(token) = cache.get(&cache_key) {
         if Instant::now() < token.expires_at {
