@@ -43,12 +43,11 @@ const PLAIN_METADATA_KEYS: &[&str] = &[
     "credential_resolutionCode",
     "credential_authMethod",
     "credential_oauthGrantType",
-    "credential_oauthTokenUrl",
     "credential_oauthClientId",
-    "credential_oauthClientSecretEnv",
     "credential_oauthScope",
-    "credential_oauthUsernameEnv",
-    "credential_oauthPasswordEnv",
+    "credential_oauthUsername",
+    "credential_oauthClientSecretSaved",
+    "credential_oauthPasswordSaved",
     "severity",
     "source",
     "sourcetype",
@@ -117,6 +116,18 @@ impl From<meta_dest::Destination> for Destination {
                 ..Default::default()
             },
         };
+        // OAuth secrets are encrypted at rest but never returned to the browser,
+        // even when the caller is permitted to edit this destination.
+        if dest.destination_type_name.as_deref() == Some("servicenow") {
+            let client_saved = dest.metadata.remove("oauth_client_secret_enc").is_some();
+            let password_saved = dest.metadata.remove("oauth_password_enc").is_some();
+            if client_saved {
+                dest.metadata.insert("credential_oauthClientSecretSaved".into(), "true".into());
+            }
+            if password_saved {
+                dest.metadata.insert("credential_oauthPasswordSaved".into(), "true".into());
+            }
+        }
         // The Jira token is write-only: a save without one keeps the stored token.
         if dest.destination_type_name.as_deref() == Some(jira::DESTINATION_TYPE)
             && let Some(headers) = dest.headers.as_mut()
@@ -321,6 +332,12 @@ pub struct Destination {
     /// Optional key-value metadata; without PUT, values outside the known plain keys read blank.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+    /// Write-only OAuth client secret. Never serialized into API GET/list responses.
+    #[serde(default, skip_serializing)]
+    pub oauth_client_secret: Option<String>,
+    /// Write-only resource-owner password for the legacy password grant.
+    #[serde(default, skip_serializing)]
+    pub oauth_password: Option<String>,
     /// The `slack_app` fields, flat on the body; absent for every other type.
     #[serde(flatten)]
     pub slack_app: SlackAppFields,
