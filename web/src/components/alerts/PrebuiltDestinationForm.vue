@@ -140,28 +140,25 @@ limitations under the License.
             labelKey="label" valueKey="value" />
         </div>
         <div class="w-1/2 py-1">
-          <OFormInput name="credentials.oauthTokenUrl" data-test="servicenow-oauth-token-url"
-            :label="raw('OAuth token endpoint (HTTPS)')" required />
-        </div>
-        <div class="w-1/2 py-1">
           <OFormInput name="credentials.oauthClientId" data-test="servicenow-oauth-client-id"
             :label="raw('OAuth client ID')" required />
         </div>
         <div class="w-1/2 py-1">
-          <OFormInput name="credentials.oauthClientSecretEnv" data-test="servicenow-oauth-secret-env"
-            :label="raw('Client secret environment variable (ZO_OAUTH_*)')" required />
+          <OFormInput name="credentials.oauthClientSecret" data-test="servicenow-oauth-client-secret"
+            :label="raw('OAuth client secret (leave blank to retain saved secret)')" type="password" />
         </div>
         <div class="w-1/2 py-1">
           <OFormInput name="credentials.oauthScope" :label="raw('Scopes (optional)')" />
         </div>
         <template v-if="serviceNowUsesPasswordGrant">
           <div class="w-1/2 py-1">
-            <OFormInput name="credentials.oauthUsernameEnv"
-              :label="raw('Username environment variable (ZO_OAUTH_*)')" required />
+            <OFormInput name="credentials.oauthUsername"
+              :label="raw('Service account username')" required />
           </div>
           <div class="w-1/2 py-1">
-            <OFormInput name="credentials.oauthPasswordEnv"
-              :label="raw('Password environment variable (ZO_OAUTH_*)')" required />
+            <OFormInput name="credentials.oauthPassword"
+              :label="raw('Service account password (leave blank to retain saved password)')"
+              type="password" />
           </div>
         </template>
       </template>
