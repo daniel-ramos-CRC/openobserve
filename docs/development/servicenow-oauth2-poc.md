@@ -37,11 +37,11 @@ The code reuses the shared safe outbound HTTP client and SSRF guard.
 ## Security/feature gaps before production
 
 - **Not compiled/tested yet**. Run Rust and frontend checks locally.
-- Test button in the prebuilt form still sends a generic HTTP test that does **not** acquire an OAuth token. This needs its own backend integration.
+- The ServiceNow prebuilt **Test** button now submits OAuth configuration to the server, obtains a token, and makes a test HTTP request. It may create a real ServiceNow incident and must be validated end-to-end. Editing a saved destination may reuse its encrypted secret only when the URL is unchanged and the caller can update that destination.
 - No forced refresh/retry on 401 from ServiceNow.
 - Process-local token cache, not shared across Fargate tasks.
 - Encryption key must be shared, backed up, restricted, and rotated carefully.
-- Changing from OAuth to Basic should be checked for secure removal of stale OAuth metadata.
+- Changing from OAuth to Basic drops OAuth ciphertext on the next save, but that behavior still needs regression testing.
 - Verify authorization controls and that logs/debug traces do not expose credentials.
 - Confirm that changing a destination type cannot expose ciphertext through alternate API endpoints.
 - Password grant is a legacy choice; prefer `client_credentials` for new applications.
