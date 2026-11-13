@@ -114,26 +114,57 @@ limitations under the License.
         />
       </div>
       <div class="w-1/2 py-1">
-        <OFormInput
-          name="credentials.username"
-          data-test="servicenow-username-input"
-          :label="t('common.username')"
-          required
-          :helpText="t('alerts.prebuiltDestinations.servicenowUsernameHelp')"
-          tabindex="0"
+        <OFormSelect
+          name="credentials.authMethod"
+          data-test="servicenow-auth-method"
+          :label="raw('Authentication method')"
+          :options="serviceNowAuthOptions"
+          labelKey="label"
+          valueKey="value"
         />
       </div>
-      <div class="w-1/2 py-1">
-        <OFormInput
-          name="credentials.password"
-          data-test="servicenow-password-input"
-          :label="t('common.password')"
-          required
-          type="password"
-          :helpText="t('alerts.prebuiltDestinations.servicenowPasswordHelp')"
-          tabindex="0"
-        />
-      </div>
+      <template v-if="!serviceNowUsesOAuth">
+        <div class="w-1/2 py-1">
+          <OFormInput name="credentials.username" data-test="servicenow-username-input"
+            :label="t('common.username')" required />
+        </div>
+        <div class="w-1/2 py-1">
+          <OFormInput name="credentials.password" data-test="servicenow-password-input"
+            :label="t('common.password')" type="password" required />
+        </div>
+      </template>
+      <template v-else>
+        <div class="w-1/2 py-1">
+          <OFormSelect name="credentials.oauthGrantType" data-test="servicenow-oauth-grant"
+            :label="raw('OAuth grant type')" :options="serviceNowGrantOptions"
+            labelKey="label" valueKey="value" />
+        </div>
+        <div class="w-1/2 py-1">
+          <OFormInput name="credentials.oauthTokenUrl" data-test="servicenow-oauth-token-url"
+            :label="raw('OAuth token endpoint (HTTPS)')" required />
+        </div>
+        <div class="w-1/2 py-1">
+          <OFormInput name="credentials.oauthClientId" data-test="servicenow-oauth-client-id"
+            :label="raw('OAuth client ID')" required />
+        </div>
+        <div class="w-1/2 py-1">
+          <OFormInput name="credentials.oauthClientSecretEnv" data-test="servicenow-oauth-secret-env"
+            :label="raw('Client secret environment variable (ZO_OAUTH_*)')" required />
+        </div>
+        <div class="w-1/2 py-1">
+          <OFormInput name="credentials.oauthScope" :label="raw('Scopes (optional)')" />
+        </div>
+        <template v-if="serviceNowUsesPasswordGrant">
+          <div class="w-1/2 py-1">
+            <OFormInput name="credentials.oauthUsernameEnv"
+              :label="raw('Username environment variable (ZO_OAUTH_*)')" required />
+          </div>
+          <div class="w-1/2 py-1">
+            <OFormInput name="credentials.oauthPasswordEnv"
+              :label="raw('Password environment variable (ZO_OAUTH_*)')" required />
+          </div>
+        </template>
+      </template>
       <div class="w-1/2 py-1">
         <OFormInput
           name="credentials.assignmentGroup"
@@ -248,12 +279,13 @@ limitations under the License.
 </template>
 
 <script lang="ts" setup>
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, inject, onMounted, ref, watch } from "vue";
 import { raw, useI18nTyped } from "@/types/i18n";
 import OButton from "@/lib/core/Button/OButton.vue";
 import OFormInput from "@/lib/forms/Input/OFormInput.vue";
 import OFormSelect from "@/lib/forms/Select/OFormSelect.vue";
 import OFormSwitch from "@/lib/forms/Switch/OFormSwitch.vue";
+import { FORM_CONTEXT_KEY } from "@/lib/forms/Form/OForm.types";
 import SlackWebhookFields from "./SlackWebhookFields.vue";
 import JiraDestinationFields from "./JiraDestinationFields.vue";
 import { useStore } from "vuex";
@@ -286,6 +318,19 @@ defineEmits(["preview", "test"]);
 
 const { t } = useI18nTyped();
 const store = useStore();
+const form = inject(FORM_CONTEXT_KEY, null);
+const serviceNowAuthMethod = form?.useStore((s: any) => s.values.credentials?.authMethod);
+const serviceNowGrant = form?.useStore((s: any) => s.values.credentials?.oauthGrantType);
+const serviceNowUsesOAuth = computed(() => serviceNowAuthMethod?.value === "oauth2");
+const serviceNowUsesPasswordGrant = computed(() => serviceNowGrant?.value === "password");
+const serviceNowAuthOptions = [
+  { label: raw("Basic authentication"), value: "basic" },
+  { label: raw("OAuth 2.0"), value: "oauth2" },
+];
+const serviceNowGrantOptions = [
+  { label: raw("Client Credentials"), value: "client_credentials" },
+  { label: raw("Password (legacy)"), value: "password" },
+];
 
 // ── Email recipients picker ───────────────────────────────────────────────
 // Only real accounts can receive alert emails, so the field offers the org's
