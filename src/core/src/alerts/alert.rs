@@ -3758,6 +3758,10 @@ pub(crate) async fn send_http_notification(
                     if key.to_lowercase().trim() == "content-type" {
                         has_context_type = true;
                     }
+                    // OAuth takes precedence; never send duplicate Authorization headers.
+                    if oauth_token.is_some() && key.eq_ignore_ascii_case("authorization") {
+                        continue;
+                    }
                     req = req.header(key, value);
                 }
             }
