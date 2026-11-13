@@ -3762,6 +3762,10 @@ pub(crate) async fn send_http_notification(
                 }
             }
         };
+        // OAuth is opt-in and overrides any stale static Authorization header.
+        if let Some(token) = &oauth_token {
+            req = req.bearer_auth(token);
+        }
         // set default content type
         if !has_context_type {
             req = req.header("Content-type", "application/json");
