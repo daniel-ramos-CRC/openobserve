@@ -211,6 +211,10 @@ async fn request(
     let builder = super::send::destination_client_builder(endpoint.skip_tls_verify);
     let client = common::utils::ssrf_guard::build_safe_destination_client(builder)?;
     let mut req = client.request(method, url::Url::parse(url)?);
+    let oauth_token = super::servicenow_oauth::bearer(endpoint).await?;
+    if let Some(token) = &oauth_token {
+        req = req.bearer_auth(token);
+    }
 
     let mut has_content_type = false;
     if let Some(headers) = &endpoint.headers {
@@ -220,6 +224,9 @@ async fn request(
             }
             if key.to_lowercase().trim() == "content-type" {
                 has_content_type = true;
+            }
+            if oauth_token.is_some() && key.eq_ignore_ascii_case("authorization") {
+                continue;
             }
             req = req.header(key, value);
         }
