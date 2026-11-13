@@ -603,6 +603,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn oauth_secrets_never_appear_in_destination_responses() {
+        let meta = meta_dest::Destination {
+            id: None,
+            org_id: "default".into(),
+            name: "oauth-test".into(),
+            module: meta_dest::Module::Alert {
+                template: Some("prebuilt_servicenow".into()),
+                destination_type: meta_dest::DestinationType::Http(meta_dest::Endpoint {
+                    url: "https://test.service-now.com/api/now/table/incident".into(),
+                    destination_type: Some("servicenow".into()),
+                    metadata: HashMap::from([
+                        ("credential_authMethod".into(), "oauth2".into()),
+                        ("oauth_client_secret_enc".into(), "AESenc:secret".into()),
+                        ("oauth_password_enc".into(), "AESenc:password".into()),
+                    ]),
+                    ..Default::default()
+                }),
+            },
+        };
+        let response = Destination::from(meta);
+        let serialized = serde_json::to_string(&response).unwrap();
+        assert!(!serialized.contains("AESenc:"));
+        assert!(!serialized.contains("oauth_client_secret_enc"));
+        assert!(!serialized.contains("oauth_password_enc"));
+        assert!(serialized.contains("credential_oauthClientSecretSaved"));
+        assert!(serialized.contains("credential_oauthPasswordSaved"));
+    }
+
+    #[test]
     fn test_destination_type_from_str_email() {
         assert_eq!(DestinationType::from("email"), DestinationType::Email);
     }
