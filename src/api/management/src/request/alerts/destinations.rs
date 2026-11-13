@@ -120,6 +120,24 @@ fn prepare_servicenow_oauth(
 /// Per-destination PUT checks in flight at once when the org-wide one fails.
 const PERMISSION_CONCURRENCY: usize = 16;
 
+/// OAuth parameters for a UI-driven ServiceNow test. Credentials are never serialized.
+#[derive(Clone, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceNowOAuthTest {
+    pub grant_type: String,
+    pub client_id: String,
+    #[serde(default, skip_serializing)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub destination_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TestDestinationRequest {
@@ -129,6 +147,8 @@ pub struct TestDestinationRequest {
     pub headers: Option<HashMap<String, String>>,
     pub body: Option<String>,
     pub skip_tls_verify: Option<bool>,
+    #[serde(default)]
+    pub service_now_oauth: Option<ServiceNowOAuthTest>,
     /// Destination type: "http" (default) or "email"
     #[serde(rename = "type", default)]
     pub destination_type: DestinationType,
@@ -181,11 +201,12 @@ pub struct TestDestinationResponse {
 )]
 pub async fn test_destination(
     Path(org_id): Path<String>,
+    Headers(user_email): Headers<UserEmail>,
     Json(test_req): Json<TestDestinationRequest>,
 ) -> Response {
     match test_req.destination_type {
         DestinationType::Email => test_email_destination(&org_id, &test_req).await,
-        DestinationType::Http => test_http_destination(&test_req).await,
+        DestinationType::Http => test_http_destination(&org_id, &user_email.user_id, &test_req).await,
         DestinationType::SlackApp => test_slack_app_destination(&org_id, &test_req).await,
         other => MetaHttpResponse::json(TestDestinationResponse {
             success: false,
@@ -258,7 +279,7 @@ async fn test_slack_app_destination(org_id: &str, test_req: &TestDestinationRequ
     })
 }
 
-async fn test_http_destination(test_req: &TestDestinationRequest) -> Response {
+async fn test_http_destination(org_id: &str, user_id: &str, test_req: &TestDestinationRequest) -> Response {
     let method = test_req
         .method
         .clone()
@@ -266,7 +287,7 @@ async fn test_http_destination(test_req: &TestDestinationRequest) -> Response {
         .to_uppercase();
     let url = &test_req.url;
     let body = test_req.body.clone().unwrap_or_default();
-    let headers = test_req.headers.clone().unwrap_or_default();
+    let mut headers = test_req.headers.clone().unwrap_or_default();
     let skip_tls_verify = test_req.skip_tls_verify.unwrap_or(false);
 
     if url.is_empty() {
@@ -276,6 +297,76 @@ async fn test_http_destination(test_req: &TestDestinationRequest) -> Response {
             response_body: None,
             error: Some("HTTP destination must have a url".to_string()),
         });
+    }
+
+    // Unlike the generic HTTP test, the ServiceNow OAuth test resolves token
+    // credentials on the backend and never sends them in response fields.
+    if let Some(oauth) = &test_req.service_now_oauth {
+        let saved = if let Some(name) = &oauth.destination_name {
+            if !can_write_destination(org_id, user_id, name).await {
+                return MetaHttpResponse::forbidden("Unauthorized Access");
+            }
+            let stored = match destinations::get(org_id, name).await {
+                Ok(dest) => dest,
+                Err(_) => return MetaHttpResponse::bad_request("Saved destination not found"),
+            };
+            // Stored secrets may only be reused with the exact previously saved
+            // URL. Never let an editor redirect a test to an untrusted origin.
+            if let Module::Alert {
+                destination_type: config::meta::destinations::DestinationType::Http(endpoint),
+                ..
+            } = &stored.module {
+                if endpoint.url != *url {
+                    return MetaHttpResponse::bad_request(
+                        "Instance URL changed; enter new OAuth credentials before testing",
+                    );
+                }
+            } else {
+                return MetaHttpResponse::bad_request("Not a saved HTTP destination");
+            }
+            Some(stored)
+        } else {
+            None
+        };
+        let mut metadata = HashMap::from([
+            ("credential_authMethod".to_string(), "oauth2".to_string()),
+            ("credential_oauthGrantType".to_string(), oauth.grant_type.clone()),
+            ("credential_oauthClientId".to_string(), oauth.client_id.clone()),
+        ]);
+        if let Some(value) = &oauth.username {
+            metadata.insert("credential_oauthUsername".into(), value.clone());
+        }
+        if let Some(value) = &oauth.scope {
+            metadata.insert("credential_oauthScope".into(), value.clone());
+        }
+        let mut destination = Destination {
+            name: "servicenow-oauth-test".into(),
+            destination_type: DestinationType::Http,
+            destination_type_name: Some("servicenow".to_string()),
+            url: url.clone(),
+            skip_tls_verify,
+            metadata,
+            oauth_client_secret: oauth.client_secret.clone(),
+            oauth_password: oauth.password.clone(),
+            ..Default::default()
+        };
+        if let Err(message) = prepare_servicenow_oauth(&mut destination, saved.as_ref()) {
+            return MetaHttpResponse::bad_request(message);
+        }
+        let endpoint = config::meta::destinations::Endpoint {
+            url: url.clone(),
+            destination_type: Some("servicenow".into()),
+            metadata: destination.metadata,
+            ..Default::default()
+        };
+        let token = match openobserve_core::alerts::notifications::servicenow_oauth::bearer(&endpoint)
+            .await
+        {
+            Ok(Some(token)) => token,
+            _ => return MetaHttpResponse::bad_request("ServiceNow OAuth token acquisition failed"),
+        };
+        headers.retain(|key, _| !key.eq_ignore_ascii_case("authorization"));
+        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
     }
 
     // The policy real sends use; an allowlist-only target gets no body back.
