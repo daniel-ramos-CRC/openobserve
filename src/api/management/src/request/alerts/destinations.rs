@@ -138,6 +138,20 @@ pub struct ServiceNowOAuthTest {
     pub destination_name: Option<String>,
 }
 
+impl std::fmt::Debug for ServiceNowOAuthTest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServiceNowOAuthTest")
+            .field("grant_type", &self.grant_type)
+            .field("client_id", &"[REDACTED]")
+            .field("client_secret", &"[REDACTED]")
+            .field("username", &"[REDACTED]")
+            .field("password", &"[REDACTED]")
+            .field("scope", &"[REDACTED]")
+            .field("destination_name", &self.destination_name)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TestDestinationRequest {
