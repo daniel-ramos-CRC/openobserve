@@ -692,7 +692,7 @@ export function usePrebuiltDestinations() {
         };
 
         // Special handling for ServiceNow - encode Basic Auth in Authorization header
-        if (type === "servicenow" && credentials.username && credentials.password) {
+        if (type === "servicenow" && credentials.authMethod !== "oauth2" && credentials.username && credentials.password) {
           const authString = btoa(`${credentials.username}:${credentials.password}`);
           destinationData.headers = {
             ...destinationData.headers,
@@ -788,7 +788,7 @@ export function usePrebuiltDestinations() {
         if (type === "servicenow") {
           // Only overwrite Authorization when both username and password are provided.
           // If either is missing, preserve the existing stored header.
-          if (credentials.username && credentials.password) {
+          if (credentials.authMethod !== "oauth2" && credentials.username && credentials.password) {
             const authString = btoa(`${credentials.username}:${credentials.password}`);
             destinationData.headers = {
               ...destinationData.headers,
