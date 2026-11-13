@@ -404,6 +404,7 @@ export function usePrebuiltDestinations() {
     type: string,
     credentials: Record<string, any>,
     template?: string,
+    savedDestinationName?: string,
   ): Promise<TestResult> {
     const requestVersion = ++testRequestVersion;
     try {
@@ -489,6 +490,19 @@ export function usePrebuiltDestinations() {
           method: config.method,
           headers: testHeaders,
           body: testBody,
+          ...(type === "servicenow" && credentials.authMethod === "oauth2"
+            ? {
+                serviceNowOAuth: {
+                  grantType: credentials.oauthGrantType || "client_credentials",
+                  clientId: credentials.oauthClientId,
+                  clientSecret: credentials.oauthClientSecret || undefined,
+                  username: credentials.oauthUsername || undefined,
+                  password: credentials.oauthPassword || undefined,
+                  scope: credentials.oauthScope || undefined,
+                  destinationName: savedDestinationName || undefined,
+                },
+              }
+            : {}),
         },
       });
 
