@@ -89,15 +89,22 @@ export const servicenowConfig: PrebuiltConfig = {
   method: "post",
   credentialFields: [
     // OAuth is entirely opt-in. Existing destinations without authMethod stay Basic.
+    // OAuth configuration is persisted through UI; secrets are write-only API fields.
     ...([
-      "authMethod", "oauthGrantType", "oauthTokenUrl", "oauthClientId",
-      "oauthClientSecretEnv", "oauthScope", "oauthUsernameEnv", "oauthPasswordEnv",
+      "authMethod", "oauthGrantType", "oauthClientId",
+      "oauthScope", "oauthUsername",
     ] as const).map((key) => ({
       key,
       labelKey: "common.username" as const,
       type: "text" as const,
       required: false,
       persistInMetadata: true,
+    })),
+    ...(["oauthClientSecret", "oauthPassword"] as const).map((key) => ({
+      key,
+      labelKey: "common.password" as const,
+      type: "password" as const,
+      required: false,
     })),
     {
       key: "instanceUrl",
