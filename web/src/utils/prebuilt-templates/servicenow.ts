@@ -88,6 +88,17 @@ export const servicenowConfig: PrebuiltConfig = {
   },
   method: "post",
   credentialFields: [
+    // OAuth is entirely opt-in. Existing destinations without authMethod stay Basic.
+    ...([
+      "authMethod", "oauthGrantType", "oauthTokenUrl", "oauthClientId",
+      "oauthClientSecretEnv", "oauthScope", "oauthUsernameEnv", "oauthPasswordEnv",
+    ] as const).map((key) => ({
+      key,
+      labelKey: "common.username" as const,
+      type: "text" as const,
+      required: false,
+      persistInMetadata: true,
+    })),
     {
       key: "instanceUrl",
       labelKey: "alerts.prebuiltDestinations.servicenowInstanceUrl",
@@ -103,7 +114,7 @@ export const servicenowConfig: PrebuiltConfig = {
       key: "username",
       labelKey: "common.username",
       type: "text",
-      required: true,
+      required: false,
       hintKey: "alerts.prebuiltDestinations.servicenowUsernameHelp",
       validator: (value: string) =>
         value.trim().length > 0 || {
@@ -114,7 +125,7 @@ export const servicenowConfig: PrebuiltConfig = {
       key: "password",
       labelKey: "common.password",
       type: "password",
-      required: true,
+      required: false,
       hintKey: "alerts.prebuiltDestinations.servicenowPasswordHelp",
       validator: (value: string) =>
         value.trim().length > 0 || {
