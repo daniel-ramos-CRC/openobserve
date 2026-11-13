@@ -70,8 +70,8 @@ fn prepare_servicenow_oauth(
     {
         return Ok(());
     }
-    let grant = dest.metadata.get("credential_oauthGrantType").map(String::as_str);
-    if !matches!(grant, Some("client_credentials" | "password")) {
+    let grant = dest.metadata.get("credential_oauthGrantType").cloned().unwrap_or_default();
+    if !matches!(grant.as_str(), "client_credentials" | "password") {
         return Err("Choose a supported OAuth grant type");
     }
     if dest.skip_tls_verify {
@@ -91,7 +91,7 @@ fn prepare_servicenow_oauth(
         .map_err(|_| "Invalid OAuth encryption key configuration")?;
     for (input, key_name, required) in [
         (dest.oauth_client_secret.take(), "oauth_client_secret_enc", true),
-        (dest.oauth_password.take(), "oauth_password_enc", grant == Some("password")),
+        (dest.oauth_password.take(), "oauth_password_enc", grant == "password"),
     ] {
         let encrypted = if let Some(raw) = input.filter(|value| !value.is_empty()) {
             Some(config::utils::encryption::encrypt_secret_value(&dek, &raw)
