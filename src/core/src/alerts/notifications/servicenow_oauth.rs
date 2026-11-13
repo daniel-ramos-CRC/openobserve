@@ -132,4 +132,29 @@ mod tests {
         };
         assert!(!enabled(&endpoint));
     }
+
+    #[test]
+    fn oauth_is_only_enabled_for_explicit_servicenow_opt_in() {
+        let mut endpoint = Endpoint {
+            destination_type: Some("servicenow".to_string()),
+            ..Default::default()
+        };
+        endpoint.metadata.insert("credential_authMethod".to_string(), "oauth2".to_string());
+        assert!(enabled(&endpoint));
+        endpoint.destination_type = Some("custom".to_string());
+        assert!(!enabled(&endpoint));
+        endpoint.destination_type = Some("servicenow".to_string());
+        endpoint.metadata.insert("credential_authMethod".to_string(), "basic".to_string());
+        assert!(!enabled(&endpoint));
+    }
+
+    #[tokio::test]
+    async fn incomplete_oauth_config_fails_closed() {
+        let mut endpoint = Endpoint {
+            destination_type: Some("servicenow".to_string()),
+            ..Default::default()
+        };
+        endpoint.metadata.insert("credential_authMethod".to_string(), "oauth2".to_string());
+        assert!(bearer(&endpoint).await.is_err());
+    }
 }
