@@ -1373,7 +1373,12 @@ const handleTestDestination = async () => {
   if (!isPrebuiltDestination.value) return;
 
   try {
-    await testDestination(dtVal.value, prebuiltCredentials.value, pickedPrebuiltTemplate.value);
+    await testDestination(
+      dtVal.value,
+      prebuiltCredentials.value,
+      pickedPrebuiltTemplate.value,
+      props.destination?.name,
+    );
   } catch {
     // testDestination owns user-facing sanitized error state.
   }
