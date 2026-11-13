@@ -196,7 +196,10 @@ export const prebuiltDestinationDefaults = (
               .filter(Boolean);
     } else {
       const v = modelValue[field.key];
-      out[field.key] = v !== undefined && v !== null ? String(v) : "";
+      out[field.key] = v !== undefined && v !== null ? String(v) : (
+        destinationType === "servicenow" && field.key === "authMethod" ? "basic" :
+        destinationType === "servicenow" && field.key === "oauthGrantType" ? "client_credentials" : ""
+      );
     }
   }
   return out;
