@@ -1,61 +1,62 @@
-# ServiceNow OAuth 2.0 destination — experimental implementation
+# ServiceNow OAuth 2.0 — UI-managed prototype
 
-This branch adds **opt-in OAuth 2.0** to the built-in ServiceNow destination. Existing Basic destinations stay on their current authentication path unless the user explicitly selects OAuth 2.0.
+Branch: `feature/servicenow-oauth2-auth`. This is an uncompiled proof of concept, **not production-ready**.
 
-## Grant types
+## Existing functionality
 
-- `client_credentials` (recommended for service-to-service integrations)
-- `password` (legacy resource-owner-password grant; use only where explicitly authorized)
+The ServiceNow destination keeps **Basic Authentication as the default**. Previously saved Basic destinations are unaffected unless an editor explicitly selects OAuth 2.0.
 
-Authorization Code is intentionally **not** offered: it requires a login/redirect, authorization callback, durable refresh-token storage, and a separate user-consent workflow. Selecting an unsupported flow must never quietly fall back to Basic.
+## New ServiceNow form
 
-## Configuration
+- **Instance URL** remains the main ServiceNow incident-table URL. The backend derives `/oauth_token.do` from its origin. There is **no separate Token URL field**.
+- **Authentication method**: Basic or OAuth 2.0.
+- **OAuth grant type**: Client Credentials (preferred) or Password (legacy).
+- **Client Credentials**: client ID, client secret, optional scope.
+- **Password grant**: all of the above, plus service-account username and password.
+- Assignment group, resolution code, and the existing message-template selection remain available.
 
-In the ServiceNow destination form, choose **OAuth 2.0** and provide:
+## UI-only per-destination setup
 
-- OAuth token endpoint (HTTPS, commonly `https://<instance>.service-now.com/oauth_token.do`)
-- Grant type, client ID and **the name** of the environment variable containing the client secret
-- Optional scope
-- For legacy password grant, the names of environment variables containing username and password
+The client secret and password are submitted through write-only API fields, encrypted with OpenObserve's existing AES-256-SIV helper *before* persisting destination metadata, and removed from destination GET/list responses. A GET response can expose non-secret configuration plus `credential_oauthClientSecretSaved`/`credential_oauthPasswordSaved` status flags, never the ciphertext or secret. Updating a destination with secret inputs left blank preserves the previous encrypted values.
 
-Example ECS task **environment variable names** (values should be sourced securely from Secrets Manager/Vault):
+No environment variables or ECS restarts are required **per ServiceNow destination**.
 
-```text
-ZO_OAUTH_SERVICENOW_CLIENT_SECRET
-ZO_OAUTH_SERVICENOW_USERNAME   # only for password grant
-ZO_OAUTH_SERVICENOW_PASSWORD   # only for password grant
-```
+**One-time deployment requirement:** configure a random, 64-byte base64-encoded AES-SIV key as `ZO_OAUTH_ENCRYPTION_KEY` through ECS Secrets Manager injection on every OpenObserve task. Keep it stable across restarts; loss of the key makes stored credentials unrecoverable. This is a new global secret and therefore needs a **one-time** task-definition change. Do not commit the key or OAuth credentials to GitHub.
 
-Never commit client secrets, real tokens, or vault values to GitHub. The destination stores only variable *names* in metadata; token material remains server-side. Task restarts pick up rotated ECS secrets; an already-running process will reuse a cached token until its TTL elapses.
+## Backend flow
 
-## Execution
+1. User saves ServiceNow OAuth settings through the UI.
+2. API validates HTTPS, grant, and secret completeness; encrypts write-only secret fields.
+3. Destination persistence stores ciphertext with existing destination records.
+4. On a real alert, the token manager derives `https://<instance>/oauth_token.do`, decrypts stored credentials server-side and requests an access token.
+5. Token is cached in the sending process until just before `expires_in`; the API send adds `Authorization: Bearer …`.
+6. Existing Basic destinations continue using their existing Authorization header.
 
-The Rust sender obtains a token with form-encoded OAuth parameters, caches it within each process based on `expires_in`, renews before expiry, and applies a Bearer header to outgoing ServiceNow alert requests and incident-resolution requests. A missing OAuth configuration or failed token request **fails closed** rather than sending Basic credentials. Other destinations are unchanged.
+The code reuses the shared safe outbound HTTP client and SSRF guard.
 
-The same shared notification code handles alert-triggered sends, but the generic editor's **Test** request currently uses a different API path and does not resolve OAuth references. Validate end-to-end using a disposable saved destination and a controlled test alert.
+## Security/feature gaps before production
 
-## Local validation
+- **Not compiled/tested yet**. Run Rust and frontend checks locally.
+- Test button in the prebuilt form still sends a generic HTTP test that does **not** acquire an OAuth token. This needs its own backend integration.
+- No forced refresh/retry on 401 from ServiceNow.
+- Process-local token cache, not shared across Fargate tasks.
+- Encryption key must be shared, backed up, restricted, and rotated carefully.
+- Changing from OAuth to Basic should be checked for secure removal of stale OAuth metadata.
+- Verify authorization controls and that logs/debug traces do not expose credentials.
+- Confirm that changing a destination type cannot expose ciphertext through alternate API endpoints.
+- Password grant is a legacy choice; prefer `client_credentials` for new applications.
+
+## Pull/test
 
 ```bash
+cd ~/openobserve
 git fetch origin
-git switch -c test-servicenow-oauth origin/feature/servicenow-oauth2-auth
-cargo fmt --all -- --check
+git switch -c test-servicenow-oauth-ui origin/feature/servicenow-oauth2-auth
+cargo fmt --all
 cargo check -p openobserve-core
+cargo check -p openobserve-api-management
 cargo test -p openobserve-core servicenow_oauth
-cd web
-npm run type-check
+cd web && NODE_OPTIONS=--max-old-space-size=8192 npm run type-check:app
 ```
 
-Check `src/core/Cargo.toml` for the exact Rust package name if necessary. Run `cargo fmt --all` locally before committing formatting fixes.
-
-## Limitations and follow-up
-
-- Experimental: **not yet compiled/tested** against a local environment. Do not deploy to production.
-- The OAuth form's pre-save **Test** button is not yet wired to the backend token resolver.
-- Cache is per-process/per-ECS-task; separate Fargate tasks acquire their own tokens.
-- A failed API call with HTTP 401 does not yet force refresh/retry.
-- Token requests are serialized by a process-wide mutex during refresh.
-- Credential replacement/revocation should be re-tested when switching existing Basic destinations to OAuth.
-- Password grant is a legacy compatibility mode; new deployments should prefer client credentials.
-- OAuth configuration currently uses environment-variable references, not native Vault secret storage.
-- Only the two supported grant types are offered; Authorization Code is out of scope until a secure callback/refresh-token architecture exists.
+Do not deploy to production until the remaining items are addressed and end-to-end test coverage is complete.
