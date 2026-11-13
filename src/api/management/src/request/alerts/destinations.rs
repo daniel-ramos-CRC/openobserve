@@ -93,6 +93,9 @@ fn prepare_servicenow_oauth(
         (dest.oauth_client_secret.take(), "oauth_client_secret_enc", true),
         (dest.oauth_password.take(), "oauth_password_enc", grant == "password"),
     ] {
+        if key_name == "oauth_password_enc" && grant != "password" {
+            continue; // Do not retain legacy password when using client_credentials.
+        }
         let encrypted = if let Some(raw) = input.filter(|value| !value.is_empty()) {
             Some(config::utils::encryption::encrypt_secret_value(&dek, &raw)
                 .map_err(|_| "Failed to encrypt OAuth credential")?)
