@@ -41,6 +41,82 @@ use crate::{
     request::{BulkDeleteRequest, BulkDeleteResponse},
 };
 
+/// Encrypt UI-submitted ServiceNow OAuth secrets before persisting destinations.
+fn prepare_servicenow_oauth(
+    dest: &mut Destination,
+    existing: Option<&config::meta::destinations::Destination>,
+) -> Result<(), &'static str> {
+    let previous = existing.and_then(|stored| {
+        if let Module::Alert {
+            destination_type: config::meta::destinations::DestinationType::Http(endpoint),
+            ..
+        } = &stored.module {
+            if endpoint.destination_type.as_deref() == Some("servicenow") {
+                return Some(&endpoint.metadata);
+            }
+        }
+        None
+    });
+    for internal in [
+        "credential_oauthClientSecretSaved", "credential_oauthPasswordSaved",
+        "credential_oauthClientSecretEnv", "credential_oauthUsernameEnv",
+        "credential_oauthPasswordEnv", "credential_oauthTokenUrl",
+        "oauth_client_secret_enc", "oauth_password_enc",
+    ] {
+        dest.metadata.remove(internal);
+    }
+    if dest.destination_type_name.as_deref() != Some("servicenow")
+        || dest.metadata.get("credential_authMethod").map(String::as_str) != Some("oauth2")
+    {
+        return Ok(());
+    }
+    let grant = dest.metadata.get("credential_oauthGrantType").map(String::as_str);
+    if !matches!(grant, Some("client_credentials" | "password")) {
+        return Err("Choose a supported OAuth grant type");
+    }
+    if dest.skip_tls_verify {
+        return Err("OAuth requires TLS certificate verification");
+    }
+    let url = url::Url::parse(&dest.url).map_err(|_| "Invalid ServiceNow instance URL")?;
+    if url.scheme() != "https" || url.host_str().is_none() {
+        return Err("ServiceNow OAuth requires an HTTPS instance URL");
+    }
+    if dest.metadata.get("credential_oauthClientId").is_none_or(|s| s.trim().is_empty()) {
+        return Err("ServiceNow OAuth client ID is required");
+    }
+    // Shared deployment key is provisioned only once, not per destination.
+    let key = std::env::var("ZO_OAUTH_ENCRYPTION_KEY")
+        .map_err(|_| "OAuth encryption key is not configured on the server")?;
+    let dek = config::utils::encryption::decode_encryption_key(&key)
+        .map_err(|_| "Invalid OAuth encryption key configuration")?;
+    for (input, key_name, required) in [
+        (dest.oauth_client_secret.take(), "oauth_client_secret_enc", true),
+        (dest.oauth_password.take(), "oauth_password_enc", grant == Some("password")),
+    ] {
+        let encrypted = if let Some(raw) = input.filter(|value| !value.is_empty()) {
+            Some(config::utils::encryption::encrypt_secret_value(&dek, &raw)
+                .map_err(|_| "Failed to encrypt OAuth credential")?)
+        } else {
+            previous.and_then(|meta| meta.get(key_name)).cloned()
+        };
+        if required && encrypted.is_none() {
+            return Err("Required OAuth credential is missing");
+        }
+        if let Some(value) = encrypted {
+            dest.metadata.insert(key_name.to_string(), value);
+        }
+    }
+    if grant == Some("password")
+        && dest.metadata.get("credential_oauthUsername").is_none_or(|s| s.trim().is_empty())
+    {
+        return Err("OAuth password grant requires a username");
+    }
+    if let Some(headers) = &mut dest.headers {
+        headers.retain(|key, _| !key.eq_ignore_ascii_case("authorization"));
+    }
+    Ok(())
+}
+
 /// Per-destination PUT checks in flight at once when the org-wide one fails.
 const PERMISSION_CONCURRENCY: usize = 16;
 
@@ -410,7 +486,7 @@ pub async fn save_destination(
     Path(org_id): Path<String>,
     Query(query): Query<HashMap<String, String>>,
     Headers(user_email): Headers<UserEmail>,
-    Json(dest): Json<Destination>,
+    Json(mut dest): Json<Destination>,
 ) -> Response {
     // Check the module query parameter to determine if this is an alert or pipeline destination
     let module = query.get("module").map(|s| s.as_str());
@@ -419,6 +495,9 @@ pub async fn save_destination(
         return MetaHttpResponse::forbidden("Not supported in the open source version");
     }
 
+    if let Err(message) = prepare_servicenow_oauth(&mut dest, None) {
+        return MetaHttpResponse::bad_request(message);
+    }
     let dest = match dest.into(org_id, is_alert) {
         Ok(dest) => dest,
         Err(e) => return destination_error_response(e),
@@ -467,7 +546,7 @@ pub async fn update_destination(
     Path((org_id, name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     Headers(user_email): Headers<UserEmail>,
-    Json(dest): Json<Destination>,
+    Json(mut dest): Json<Destination>,
 ) -> Response {
     // Check the module query parameter to determine if this is an alert or pipeline destination
     let module = query.get("module").map(|s| s.as_str());
@@ -476,6 +555,10 @@ pub async fn update_destination(
         return MetaHttpResponse::forbidden("Not supported in the open source version");
     }
 
+    let existing = destinations::get(&org_id, &name).await.ok();
+    if let Err(message) = prepare_servicenow_oauth(&mut dest, existing.as_ref()) {
+        return MetaHttpResponse::bad_request(message);
+    }
     let dest = match dest.into(org_id, is_alert) {
         Ok(dest) => dest,
         Err(e) => return destination_error_response(e),
