@@ -42,7 +42,8 @@ use crate::{
 };
 
 /// Encrypt UI-submitted ServiceNow OAuth secrets before persisting destinations.
-fn prepare_servicenow_oauth(
+async fn prepare_servicenow_oauth(
+    org_id: &str,
     dest: &mut Destination,
     existing: Option<&config::meta::destinations::Destination>,
 ) -> Result<(), &'static str> {
@@ -61,7 +62,7 @@ fn prepare_servicenow_oauth(
         "credential_oauthClientSecretSaved", "credential_oauthPasswordSaved",
         "credential_oauthClientSecretEnv", "credential_oauthUsernameEnv",
         "credential_oauthPasswordEnv", "credential_oauthTokenUrl",
-        "oauth_client_secret_enc", "oauth_password_enc",
+        "oauth_client_secret_enc", "oauth_password_enc", "oauth_encryption_org",
     ] {
         dest.metadata.remove(internal);
     }
@@ -84,11 +85,17 @@ fn prepare_servicenow_oauth(
     if dest.metadata.get("credential_oauthClientId").is_none_or(|s| s.trim().is_empty()) {
         return Err("ServiceNow OAuth client ID is required");
     }
-    // Shared deployment key is provisioned only once, not per destination.
-    let key = std::env::var("ZO_OAUTH_ENCRYPTION_KEY")
-        .map_err(|_| "OAuth encryption key is not configured on the server")?;
-    let dek = config::utils::encryption::decode_encryption_key(&key)
-        .map_err(|_| "Invalid OAuth encryption key configuration")?;
+    // Reuse OpenObserve's existing master-key-wrapped organization DEK.
+    // Without a configured master key, org DEKs are only base64-wrapped.
+    if !matches!(
+        infra::table::cipher::master_key(),
+        Ok(infra::table::cipher::MasterKeyMode::Aes(_))
+    ) {
+        return Err("OAuth requires the existing O2_MASTER_ENCRYPTION_KEY");
+    }
+    let dek = infra::table::cipher::get_dek(org_id)
+        .await
+        .map_err(|_| "Unable to load organization encryption key")?;
     for (input, key_name, required) in [
         (dest.oauth_client_secret.take(), "oauth_client_secret_enc", true),
         (dest.oauth_password.take(), "oauth_password_enc", grant == "password"),
@@ -109,11 +116,12 @@ fn prepare_servicenow_oauth(
             dest.metadata.insert(key_name.to_string(), value);
         }
     }
-    if grant == Some("password")
+    if grant == "password"
         && dest.metadata.get("credential_oauthUsername").is_none_or(|s| s.trim().is_empty())
     {
         return Err("OAuth password grant requires a username");
     }
+    dest.metadata.insert("oauth_encryption_org".into(), org_id.to_string());
     if let Some(headers) = &mut dest.headers {
         headers.retain(|key, _| !key.eq_ignore_ascii_case("authorization"));
     }
@@ -367,7 +375,7 @@ async fn test_http_destination(org_id: &str, user_id: &str, test_req: &TestDesti
             oauth_password: oauth.password.clone(),
             ..Default::default()
         };
-        if let Err(message) = prepare_servicenow_oauth(&mut destination, saved.as_ref()) {
+        if let Err(message) = prepare_servicenow_oauth(org_id, &mut destination, saved.as_ref()).await {
             return MetaHttpResponse::bad_request(message);
         }
         let endpoint = config::meta::destinations::Endpoint {
@@ -603,7 +611,7 @@ pub async fn save_destination(
         return MetaHttpResponse::forbidden("Not supported in the open source version");
     }
 
-    if let Err(message) = prepare_servicenow_oauth(&mut dest, None) {
+    if let Err(message) = prepare_servicenow_oauth(&org_id, &mut dest, None).await {
         return MetaHttpResponse::bad_request(message);
     }
     let dest = match dest.into(org_id, is_alert) {
@@ -664,7 +672,7 @@ pub async fn update_destination(
     }
 
     let existing = destinations::get(&org_id, &name).await.ok();
-    if let Err(message) = prepare_servicenow_oauth(&mut dest, existing.as_ref()) {
+    if let Err(message) = prepare_servicenow_oauth(&org_id, &mut dest, existing.as_ref()).await {
         return MetaHttpResponse::bad_request(message);
     }
     let dest = match dest.into(org_id, is_alert) {
