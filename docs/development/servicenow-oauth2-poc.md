@@ -21,7 +21,12 @@ The client secret and password are submitted through write-only API fields, encr
 
 No environment variables or ECS restarts are required **per ServiceNow destination**.
 
-**One-time deployment requirement:** configure a random, 64-byte base64-encoded AES-SIV key as `ZO_OAUTH_ENCRYPTION_KEY` through ECS Secrets Manager injection on every OpenObserve task. Keep it stable across restarts; loss of the key makes stored credentials unrecoverable. This is a new global secret and therefore needs a **one-time** task-definition change. Do not commit the key or OAuth credentials to GitHub.
+**Use the existing OpenObserve encryption setup.** OpenObserve maintains an AES-256-SIV data-encryption key (DEK) per organization via `infra::table::cipher::get_dek(org_id)`. That DEK is stored in the `cipher_keys` table, protected by OpenObserve's **existing** `O2_MASTER_ENCRYPTION_KEY`.
+
+The OAuth integration uses this existing organization DEK for secret encryption/decryption and rejects OAuth configuration when the master-key mode is not AES. There is **no** `ZO_OAUTH_ENCRYPTION_KEY` requirement.
+
+**Important:** The master key is optional in baseline OpenObserve, and without it DEKs may only be base64-wrapped in the database. An administrator must verify `O2_MASTER_ENCRYPTION_KEY` is already configured and initialized securely. If it is not, setting up that existing platform key requires a **one-time** infrastructure change, but no new key per ServiceNow destination. Never rotate or replace the master key without following OpenObserve's key migration process.
+
 
 ## Backend flow
 
