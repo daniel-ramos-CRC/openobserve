@@ -58,10 +58,21 @@ pub async fn bearer(endpoint: &Endpoint) -> anyhow::Result<Option<String>> {
     if client_id.trim().is_empty() {
         anyhow::bail!("Incomplete ServiceNow OAuth configuration");
     }
-    let key = std::env::var("ZO_OAUTH_ENCRYPTION_KEY")
-        .map_err(|_| anyhow::anyhow!("OAuth encryption key is not configured"))?;
-    let dek = config::utils::encryption::decode_encryption_key(&key)
-        .map_err(|_| anyhow::anyhow!("Invalid OAuth encryption key"))?;
+    // OpenObserve already manages per-organization DEKs, wrapped by its
+    // deployment-level O2_MASTER_ENCRYPTION_KEY. Never use unwrapped DEKs.
+    if !matches!(
+        infra::table::cipher::master_key(),
+        Ok(infra::table::cipher::MasterKeyMode::Aes(_))
+    ) {
+        anyhow::bail!("OAuth requires the existing OpenObserve master encryption key");
+    }
+    let org_id = field(endpoint, "oauth_encryption_org");
+    if org_id.is_empty() {
+        anyhow::bail!("OAuth destination is missing its organization encryption context");
+    }
+    let dek = infra::table::cipher::get_dek(org_id)
+        .await
+        .map_err(|_| anyhow::anyhow!("Unable to load organization encryption key"))?;
     let decrypt = |name: &str| -> anyhow::Result<String> {
         let encrypted = field(endpoint, name);
         if encrypted.is_empty() {
